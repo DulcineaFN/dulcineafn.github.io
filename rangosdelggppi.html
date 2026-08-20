@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Escuadra — GGPPI</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a href="rango.html">Tu rango</a>
+    <a href="rangosdelggppi.html" class="active">Escuadra</a>
+  </nav>
+
+  <h1>Los rangos del Gran Grupo Polivalente Del Proletariado Izquierdista</h1>
+  <p class="subtitle">Elo en directo, actualizado en cada visita.</p>
+
+  <div id="roster"><p class="status">Cargando el elo de la escuadra…</p></div>
+</div>
+
+<script src="config.js"></script>
+<script src="ranks.js"></script>
+<script>
+const roster = document.getElementById("roster");
+
+// The API returns plain text (not JSON) like "Player not found" for
+// bad IDs, and the same thing happens for players who haven't
+// finished their placement matches yet — there's just no ranked_1v1
+// record for them. Either way, treat it as "no data" rather than
+// crashing.
+async function fetchPlayerStats(id) {
+  try {
+    const res = await fetch(
+      `https://api.brawlhalla.com/v1/player/stats?brawlhalla_id=${encodeURIComponent(id)}&mode=ranked_1v1`
+    );
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+    if (!data || typeof data.rating !== "number") return null;
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function loadRoster() {
+  let players;
+  try {
+    const res = await fetch("roster.json");
+    players = await res.json();
+  } catch (err) {
+    roster.innerHTML = `<p class="status">No se pudo cargar la lista de jugadores. Comprueba que roster.json esté junto a rangosdelggppi.html.</p>`;
+    return;
+  }
+
+  const results = await Promise.all(
+    players.map(async (p) => ({ ...p, data: await fetchPlayerStats(p.brawlhalla_id) }))
+  );
+
+  // Rated players sorted highest to lowest. Anyone without data
+  // (placements incomplete, bad ID, etc.) sinks to the bottom.
+  results.sort((a, b) => {
+    const ra = a.data ? a.data.rating : -Infinity;
+    const rb = b.data ? b.data.rating : -Infinity;
+    return rb - ra;
+  });
+
+  renderRoster(results);
+}
+
+function renderRoster(results) {
+  roster.innerHTML = "";
+
+  const lo = DISPLAY_BASELINE; // 720, Estaño I
+  const diamondStart = RANK_TIERS[RANK_TIERS.length - 1].subtiers[0].elo; // 2000
+  const ratedElos = results.filter((r) => r.data).map((r) => r.data.rating);
+  const maxElo = Math.max(diamondStart + OPEN_TOP_WIDTH, ...(ratedElos.length ? ratedElos : [lo])) + 100;
+  const span = maxElo - lo;
+
+  results.forEach((player) => {
+    const row = document.createElement("div");
+    row.className = "roster-row";
+
+    if (!player.data) {
+      row.innerHTML = `
+        <div class="roster-name-row">
+          <span>${player.displayName}</span>
+          <span class="roster-rank">Este jugador aún no ha completado sus partidas de colocación.</span>
+        </div>
+        <div class="roster-bar-outer">
+          <div class="roster-bar-inner" style="width:0%;"></div>
+        </div>
+      `;
+      roster.appendChild(row);
+      return;
+    }
+
+    const rating = player.data.rating;
+    const { current } = getSubtierBracket(rating);
+    // Floor at 0, not some fake minimum — if you're below the 720
+    // baseline (Estaño 0), your bar should genuinely show no progress.
+    const widthPct = Math.max(((rating - lo) / span) * 100, 0);
+
+    row.innerHTML = `
+      <div class="roster-name-row">
+        <span>${player.displayName}</span>
+        <span class="roster-rank">${rating} — ${current.name}</span>
+      </div>
+      <div class="roster-bar-outer">
+        <div class="roster-bar-inner" style="width:${widthPct}%; background:${current.color};"></div>
+      </div>
+    `;
+    roster.appendChild(row);
+  });
+}
+
+loadRoster();
+</script>
+</body>
+</html>

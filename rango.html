@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tu rango — GGPPI</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="page">
+  <nav>
+    <a href="rango.html" class="active">Tu rango</a>
+    <a href="rangosdelggppi.html">Escuadra</a>
+  </nav>
+
+  <h1 id="page-heading">Tu rango</h1>
+  <p class="subtitle" id="page-subtitle">Dónde te encuentras exactamente dentro de tu franja actual.</p>
+
+  <div class="controls">
+    <label for="elo-input">Elo</label>
+    <input type="number" id="elo-input" value="1500" min="0" />
+    <button id="toggle-btn">Ver el panorama general</button>
+  </div>
+
+  <div id="bar-container"></div>
+  <div class="status" id="status"></div>
+</div>
+
+<script src="config.js"></script>
+<script src="ranks.js"></script>
+<script>
+const eloInput = document.getElementById("elo-input");
+const container = document.getElementById("bar-container");
+const status = document.getElementById("status");
+const toggleBtn = document.getElementById("toggle-btn");
+const heading = document.getElementById("page-heading");
+const subtitle = document.getElementById("page-subtitle");
+
+let mode = "zoomed"; // or "big"
+
+const STORAGE_KEY = "ggppi-elo";
+const saved = localStorage.getItem(STORAGE_KEY);
+if (saved !== null) eloInput.value = saved;
+
+eloInput.addEventListener("input", () => {
+  localStorage.setItem(STORAGE_KEY, eloInput.value);
+  render();
+});
+
+toggleBtn.addEventListener("click", () => {
+  mode = mode === "zoomed" ? "big" : "zoomed";
+  toggleBtn.textContent = mode === "zoomed" ? "Ver el panorama general" : "Volver a mi franja";
+  heading.textContent = mode === "zoomed" ? "Tu rango" : "Tu rango, en el gran esquema de las cosas";
+  subtitle.textContent = mode === "zoomed"
+    ? "Dónde te encuentras exactamente dentro de tu franja actual."
+    : "Todos los rangos, de Estaño I a Diamante, a escala.";
+  render();
+});
+
+function renderZoomed(elo) {
+  const { current, next } = getSubtierBracket(elo);
+  container.innerHTML = `
+    <div class="bar-track">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill" style="background:${current.color};"></div>
+      </div>
+      <div class="progress-pointer" id="pointer">
+        <span class="pointer-label"></span>
+        <span class="pointer-caret">▼</span>
+      </div>
+    </div>
+  `;
+
+  const lo = current.elo;
+  const hi = next ? next.elo : lo + OPEN_TOP_WIDTH;
+  const clamped = Math.min(Math.max(elo, lo), hi);
+  const pct = ((clamped - lo) / (hi - lo)) * 100;
+
+  document.getElementById("progress-fill").style.width = pct + "%";
+
+  const pointer = document.getElementById("pointer");
+  pointer.style.left = pct + "%";
+  pointer.querySelector(".pointer-label").textContent = elo;
+
+  const leftLabel = document.createElement("div");
+  leftLabel.style.cssText = "position:absolute; left:0; top:56px; font-size:13px; color:#a8a8a8;";
+  leftLabel.textContent = `${current.name} (${lo})`;
+  container.querySelector(".bar-track").appendChild(leftLabel);
+
+  const rightLabel = document.createElement("div");
+  rightLabel.style.cssText = "position:absolute; right:0; top:56px; font-size:13px; color:#a8a8a8; text-align:right;";
+  rightLabel.textContent = next ? `${next.name} (${next.elo})` : "Sin techo";
+  container.querySelector(".bar-track").appendChild(rightLabel);
+
+  status.innerHTML = buildStatusMessage(elo);
+}
+
+function renderBigPicture(elo) {
+  const lo = DISPLAY_BASELINE; // 720, Estaño I — el verdadero inicio de la escalera
+  const diamondStart = RANK_TIERS[RANK_TIERS.length - 1].subtiers[0].elo; // 2000
+  const hi = diamondStart + OPEN_TOP_WIDTH;
+  const span = hi - lo;
+
+  const bar = document.createElement("div");
+  bar.className = "bar";
+
+  const track = document.createElement("div");
+  track.className = "bar-track";
+
+  const ticks = document.createElement("div");
+  ticks.className = "tick-labels";
+
+  RANK_TIERS.forEach((tier, i) => {
+    const isLast = i === RANK_TIERS.length - 1;
+    const isFirst = i === 0;
+    const startElo = isFirst ? DISPLAY_BASELINE : tier.subtiers[0].elo;
+    const endElo = isLast ? hi : RANK_TIERS[i + 1].subtiers[0].elo;
+    const widthPct = ((endElo - startElo) / span) * 100;
+
+    const seg = document.createElement("div");
+    seg.className = "bar-segment" + (isLast ? " open" : "");
+    seg.style.width = widthPct + "%";
+    seg.style.background = tier.color;
+    seg.style.setProperty("--seg-color", tier.color);
+    seg.textContent = tier.tier;
+    bar.appendChild(seg);
+
+    const tick = document.createElement("div");
+    tick.className = "tick-label";
+    tick.style.left = (((startElo - lo) / span) * 100) + "%";
+    tick.textContent = isLast ? `${startElo}+` : startElo;
+    ticks.appendChild(tick);
+  });
+
+  track.appendChild(bar);
+  const pointer = document.createElement("div");
+  pointer.className = "progress-pointer";
+  pointer.innerHTML = `<span class="pointer-label"></span><span class="pointer-caret">▼</span>`;
+  track.appendChild(pointer);
+
+  container.innerHTML = "";
+  container.appendChild(track);
+  container.appendChild(ticks);
+
+  const clamped = Math.min(Math.max(elo, lo), hi);
+  const pct = ((clamped - lo) / span) * 100;
+  pointer.style.left = pct + "%";
+  pointer.querySelector(".pointer-label").textContent = elo;
+
+  status.innerHTML = buildStatusMessage(elo);
+}
+
+function render() {
+  let elo = parseInt(eloInput.value, 10);
+  if (isNaN(elo)) {
+    status.textContent = "Introduce un elo válido.";
+    return;
+  }
+  if (elo < 0) {
+    elo = 0;
+    eloInput.value = 0;
+    localStorage.setItem(STORAGE_KEY, "0");
+  }
+  if (mode === "zoomed") renderZoomed(elo);
+  else renderBigPicture(elo);
+}
+
+render();
+</script>
+</body>
+</html>
